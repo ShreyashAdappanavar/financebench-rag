@@ -1,0 +1,10 @@
+# .dockerignore
+
+./financebench_github/*
+.dev-docs/
+.env
+.venv/
+data/
+financebench/
+*.pdf
+.git/
