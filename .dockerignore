@@ -8,3 +8,6 @@ data/
 financebench/
 *.pdf
 .git/
+tmp/
+scratch/
+.vscode/
