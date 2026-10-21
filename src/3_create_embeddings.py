@@ -1,4 +1,4 @@
-# src/create_embeddings.py
+# src/3_create_embeddings.py
 
 import os
 import json
