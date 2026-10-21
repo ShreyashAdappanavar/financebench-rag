@@ -6,7 +6,8 @@ finbench_github/
 .venv/
 __pycache__/
 *.pyc
-data/
+data/*
+!data/split.json
 *.pdf
 tmp/
 scratch/
