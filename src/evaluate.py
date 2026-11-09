@@ -9,7 +9,7 @@ from pinecone import Pinecone
 from dotenv import load_dotenv
 
 import config
-from labeller import load_and_process_chunks, load_and_process_questions, chunk_question_grader
+from labeller import load_and_process_chunks, load_and_process_questions, chunk_question_grader, grader
 from retrieval import dense_retrieval
 
 load_dotenv()
@@ -21,18 +21,25 @@ RETRIEVERS = {
     "dense": dense_retrieval,
 }
 
+def find_unreachable(all_chunks, questions_lookup):
+    """Evidence items that no chunk of the current version can grade 2 (the evidence-level ceiling)."""
+    unreachable = []
+    for qid, question in questions_lookup.items():
+        for evidence in question['evidence']:
+            page = evidence['evidence_page_num']
+            found = False
+            for chunk in all_chunks:
+                if chunk['doc_id'] == evidence['doc_name'] and chunk['page_start'] <= page <= chunk['page_end']:
+                    if grader(chunk, evidence)[0] == 2:
+                        found = True
+                        break
+            if not found:
+                unreachable.append((qid, evidence['doc_name'], page))
+    return unreachable
+
 # Dev evidence items that no chunk can grade 2
-UNREACHABLE = [
-    ("financebench_id_10130", "CORNING_2020_10K", 71),
-    ("financebench_id_04660", "BLOCK_2016_10K", 67),
-    ("financebench_id_03838", "BLOCK_2020_10K", 85),
-    ("financebench_id_00711", "JOHNSON_JOHNSON_2022_10K", 45),
-    ("financebench_id_00005", "CORNING_2022_10K", 59),
-    ("financebench_id_04417", "BESTBUY_2019_10K", 51),
-    ("financebench_id_10130", "CORNING_2020_10K", 69),
-    ("financebench_id_00070", "AMERICANWATERWORKS_2022_10K", 81),
-    ("financebench_id_00995", "AMD_2022_10K", 3),
-]
+
+
 KS = [5, 10, 20, 50]
 EXHIBITS = "Financial Statements & Exhibits"
 
@@ -87,7 +94,7 @@ def grade(results, chunks_lookup, questions_lookup):
     return results
 
 
-def report(settings, results, questions_lookup, chunks_lookup, all_chunks):
+def report(settings, results, questions_lookup, chunks_lookup, all_chunks, unreachable):
     print(f"Settings: {settings}\n")
 
     # ---------- 1. For every evidence item: the first rank where it is found ----------
@@ -107,7 +114,7 @@ def report(settings, results, questions_lookup, chunks_lookup, all_chunks):
                 if grade_value >= 1 and first_rank_page is None:
                     first_rank_page = chunk['rank']
 
-            reachable = (qid, evidence['doc_name'], evidence['evidence_page_num']) not in UNREACHABLE
+            reachable = (qid, evidence['doc_name'], evidence['evidence_page_num']) not in unreachable
 
             all_items.append({
                 "qid": qid,
@@ -204,6 +211,11 @@ def main():
     all_questions, dev_questions_lookup, test_questions_lookup = load_and_process_questions()
     assert len(dev_questions_lookup) == 38
 
+    unreachable = find_unreachable(all_chunks, dev_questions_lookup)
+    print(f"Unreachable evidence items for {config.VERSION}: {len(unreachable)}")
+    for item in unreachable:
+        print(f"  {item}")
+
     for name in RETRIEVERS:
         print(f"\n==================== {name} ====================")
         path = config.RESULTS_DIR / f"{name}.json"
@@ -217,7 +229,7 @@ def main():
             settings, results = run_retriever(name, dev_questions_lookup)
 
         results = grade(results, all_chunks_lookup, dev_questions_lookup)
-        report(settings, results, dev_questions_lookup, all_chunks_lookup, all_chunks)
+        report(settings, results, dev_questions_lookup, all_chunks_lookup, all_chunks, unreachable)
 
 
 if __name__ == "__main__":

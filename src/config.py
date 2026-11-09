@@ -1,5 +1,6 @@
 # src/config.py
 # To try a new chunking experiment - set VERSION, add its namespace to NAMESPACES, change the chunk settings.
+# Every chunking change needs a new VERSION: index.py skips steps when files already exist.
 
 import os
 from pathlib import Path
