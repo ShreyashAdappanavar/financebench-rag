@@ -1,4 +1,4 @@
-# 6_make_question_splits.py
+# make_split.py
 
 import json
 import random
