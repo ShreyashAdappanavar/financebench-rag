@@ -12,3 +12,4 @@ data/*
 tmp/
 scratch/
 .vscode/
+src/old

@@ -1,4 +1,10 @@
-"""Split each 10-K into ~400-token chunks with metadata. Writes data/chunks.jsonl.
+# src/ingest.py
+# This ingests all 10K documents from the downloaded finance bench repo
+
+"""
+Page extraction (cached) and 10-K Item/section detection.
+
+Split each 10-K into ~400-token chunks with metadata. Writes data/chunks.jsonl.
 
 Rules (see decisions-log.md, Day 1):
 - A chunk never crosses a section (Item) boundary, but may cross page boundaries.
@@ -6,21 +12,74 @@ Rules (see decisions-log.md, Day 1):
   piece is <= 400 tokens; pieces are then packed into chunks with ~50 tokens of overlap.
 - page_start / page_end record which pages a chunk touches (0-based, like FinanceBench).
 """
+
 import re
 import json
+import pymupdf
 import statistics
 from bisect import bisect_right
 from collections import Counter
-
 import tiktoken
+import config
 
-from sections import REPO, DATA, get_pages, find_item_starts, item_order, LABELS
+MAX_TOKENS = config.CHUNK_MAX_TOKENS
+OVERLAP_TOKENS = config.CHUNK_OVERLAP_TOKENS
+OUT = config.CHUNKS_PATH
+PAGES_DIR = config.PAGES_DIR
+PDF_DIR = config.PDF_DIR
+QUESTIONS_PATH = config.QUESTIONS_PATH
 
-MAX_TOKENS = 400
-OVERLAP_TOKENS = 50
-OUT = REPO / "data" / "chunks.jsonl"
+
+
+# Real Item heading: start of line, "Item", number (+ optional A/B/C), then punctuation.
+HEADING = re.compile(r"^\s*item\s*(\d{1,2}[a-c]?)\s*[.:\-–—]", re.IGNORECASE)
+TOC_SCAN_PAGES = 5
+TOC_MIN_LABELS = 3
+
+
+LABELS = {"1": "Item 1 Business", "1A": "Item 1A Risk Factors", "7": "Item 7 MD&A",
+          "7A": "Item 7A Market Risk", "8": "Item 8 Financial Statements"}
+
 
 enc = tiktoken.get_encoding("cl100k_base")   # tokenizer used by text-embedding-3-small
+
+
+
+
+def get_pages(doc_name: str) -> list[str]:
+    """Text of every page, index = 0-based page number. Extracts once, then reads the cache."""
+    cache = PAGES_DIR / f"{doc_name}.json"
+    if cache.exists():
+        return json.loads(cache.read_text(encoding="utf-8"))
+    PAGES_DIR.mkdir(parents=True, exist_ok=True)
+    with pymupdf.open(PDF_DIR / f"{doc_name}.pdf") as pdf:
+        pages = [page.get_text() for page in pdf]
+    cache.write_text(json.dumps(pages), encoding="utf-8")
+    return pages
+
+def find_item_starts(pages: list[str]) -> dict[str, int]:
+    """{item_label: start_page}, 0-based. A missing Item was not found."""
+    hits = []
+    for page_num, text in enumerate(pages):
+        for line in text.splitlines():
+            m = HEADING.match(line)
+            if m:
+                hits.append((page_num, m.group(1).upper()))
+    labels_per_page = {}
+    for p, label in hits:
+        labels_per_page.setdefault(p, set()).add(label)
+    toc_pages = {p for p, labels in labels_per_page.items()
+                 if p < TOC_SCAN_PAGES and len(labels) >= TOC_MIN_LABELS}
+    starts = {}
+    for p, label in hits:
+        if p not in toc_pages:
+            starts.setdefault(label, p)
+    return starts
+
+def item_order(label: str) -> tuple[int, str]:
+    """Sort key: "9B" -> (9, "B"), "14" -> (14, "")."""
+    m = re.match(r"(\d+)([A-C]?)", label)
+    return int(m.group(1)), m.group(2)
 
 
 def n_tokens(s: str) -> int:
@@ -156,7 +215,7 @@ def build_chunks(doc_name: str, company: str) -> list[dict]:
 # ---------------------------------------------------------------- 5. run + checks
 
 def main():
-    questions = [json.loads(l) for l in open(DATA / "data" / "financebench_open_source.jsonl", encoding="utf-8")]
+    questions = [json.loads(l) for l in open(QUESTIONS_PATH, encoding="utf-8")]
     tenk = [q for q in questions if q["doc_name"].endswith("_10K")]
     company_of = {q["doc_name"]: q["company"] for q in tenk}
     docs = sorted(company_of)

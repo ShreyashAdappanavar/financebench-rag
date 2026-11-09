@@ -1,23 +1,16 @@
-# labeller.py 
-# (chunk - question grader) 
+# src/labeller.py 
 
-
-import os
 import json
-from pathlib import Path
-from dotenv import load_dotenv
+import config
 from typing import Tuple, List
 
-load_dotenv()
 
 MIN_WORD_COUNT = 20
 OVERLAP_THRESHOLD = 0.8
 
-BASE_PATH = Path(os.getenv("BASE_PATH"))
-ALL_QUESTIONS_PATH = BASE_PATH / "finbench_github" / "financebench" / "data" / "financebench_open_source.jsonl"
-SPLIT_PATH = BASE_PATH / "data" / "split.json"
-ALL_DATA_PATH = BASE_PATH / "data"
-CHUNKS = ALL_DATA_PATH / "chunks.jsonl"
+ALL_QUESTIONS_PATH = config.QUESTIONS_PATH
+SPLIT_PATH = config.SPLIT_PATH
+CHUNKS = config.CHUNKS_PATH
 
 
 def load_questions()  -> List[dict]:

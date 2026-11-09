@@ -1,13 +1,16 @@
 # .dockerignore
 
-./financebench_github/*
+finbench_github/
 .dev-docs/
 .env
 .venv/
 data/
-financebench/
+notebooks/
+__pycache__/
+*.pyc
 *.pdf
 .git/
 tmp/
 scratch/
 .vscode/
+src/old

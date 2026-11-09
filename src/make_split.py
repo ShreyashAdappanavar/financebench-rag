@@ -1,24 +1,16 @@
 # 6_make_question_splits.py
 
-import os
 import json
-from pathlib import Path
-from dotenv import load_dotenv
 import random
+import config
 
 
-load_dotenv()
-
-
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-BASE_PATH = Path(os.getenv("BASE_PATH"))
-
-ALL_QUESTIONS_PATH = BASE_PATH / "finbench_github" / "financebench" / "data" / "financebench_open_source.jsonl"
+ALL_QUESTIONS_PATH = config.QUESTIONS_PATH
 
 SEED = 42
 random.seed(SEED)
 
-SPLIT_PATH = BASE_PATH / "data" / "split.json"
+SPLIT_PATH = config.SPLIT_PATH
 
 all_questions = []
 

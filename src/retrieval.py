@@ -1,19 +1,18 @@
 # src/retrieval.py
 
-import os
 from openai import OpenAI
+import config
 from pinecone.index import Index
-from dotenv import load_dotenv
 from typing import List, Dict
 
-load_dotenv()
 
-NAMESPACE = os.getenv("NAMESPACE")
-INDEX_NAME = os.getenv("INDEX_NAME")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL")
+NAMESPACE = config.NAMESPACE
+INDEX_NAME = config.INDEX_NAME
+EMBEDDING_MODEL = config.EMBEDDING_MODEL
+TOP_K = config.TOP_K
 
 def dense_retrieval(qs: str, openai_client: OpenAI, index: Index, include_fields: List[str],
-                    top_k: int = 50) -> List[Dict]:
+                    top_k: int = TOP_K) -> List[Dict]:
 
 
     qs_embeddings = openai_client.embeddings.create(input=qs, model=EMBEDDING_MODEL).data[0].embedding
@@ -38,4 +37,3 @@ def dense_retrieval(qs: str, openai_client: OpenAI, index: Index, include_fields
         dense_chunks.append(curr_doc)
 
     return dense_chunks
-
