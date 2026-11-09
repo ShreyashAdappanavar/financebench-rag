@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 import config
 from labeller import load_and_process_chunks, load_and_process_questions, chunk_question_grader, grader
-from retrieval import dense_retrieval
+from retrieval import dense_retrieval, bm25_retrieval
 
 load_dotenv()
 
@@ -19,6 +19,7 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
 RETRIEVERS = {
     "dense": dense_retrieval,
+    "bm25": bm25_retrieval,
 }
 
 def find_unreachable(all_chunks, questions_lookup):

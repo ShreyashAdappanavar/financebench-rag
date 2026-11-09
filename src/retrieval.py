@@ -27,13 +27,38 @@ def dense_retrieval(qs: str, openai_client: OpenAI, index: Index, include_fields
             include_fields=include_fields,
         )
 
-    dense_chunks = []
+    chunks = []
 
     for i, doc in enumerate(res.matches):
         curr_score = doc.score
         curr_doc = doc.to_dict()
         curr_doc['score'] = curr_score
         curr_doc['rank'] = i + 1
-        dense_chunks.append(curr_doc)
+        chunks.append(curr_doc)
 
-    return dense_chunks
+    return chunks
+
+def bm25_retrieval(qs: str, openai_client: OpenAI | None, index: Index, include_fields: List[str],
+                    top_k: int = TOP_K) -> List[Dict]:
+    
+    res = index.documents.search(
+            namespace=NAMESPACE,
+            top_k=top_k,
+            score_by=[{
+                "type": "text",
+                "fields": ["text"],
+                "query": qs,
+                }],
+            include_fields=include_fields,
+        )
+
+    chunks = []
+
+    for i, doc in enumerate(res.matches):
+        curr_score = doc.score
+        curr_doc = doc.to_dict()
+        curr_doc['score'] = curr_score
+        curr_doc['rank'] = i + 1
+        chunks.append(curr_doc)
+
+    return chunks
