@@ -211,6 +211,13 @@ def build_chunks(doc_name: str, company: str) -> list[dict]:
             })
     return records
 
+def save_filings(chunks):
+    filings = {}
+    for chunk in chunks:
+        filings.setdefault(chunk['company'], set()).add(int(chunk['fiscal_year']))
+    filings = {company: sorted(years) for company, years in filings.items()}
+    with open(config.FILINGS_PATH, "w") as f:
+        json.dump(filings, f, indent=2)
 
 # ---------------------------------------------------------------- 5. run + checks
 
@@ -256,6 +263,7 @@ def main():
            if c["page_start"] <= 59 <= c["page_end"] and "1,577" in c["text"]]
     print(f"\n[4] 3M p59 chunks containing '1,577': {hit}")
 
+    save_filings(all_chunks)
 
 if __name__ == "__main__":
     main()

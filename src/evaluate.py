@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 import config
 from labeller import load_and_process_chunks, load_and_process_questions, chunk_question_grader, grader
-from retrieval import dense_retrieval, bm25_retrieval
+from retrieval import dense_retrieval, bm25_retrieval, hybrid_retrieval
 
 load_dotenv()
 
@@ -20,6 +20,7 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 RETRIEVERS = {
     "dense": dense_retrieval,
     "bm25": bm25_retrieval,
+    "hybrid": hybrid_retrieval,
 }
 
 def find_unreachable(all_chunks, questions_lookup):
@@ -41,7 +42,7 @@ def find_unreachable(all_chunks, questions_lookup):
 # Dev evidence items that no chunk can grade 2
 
 
-KS = [5, 10, 20, 50]
+KS = [5, 10, 20, 50, 60, 80, 100]
 EXHIBITS = "Financial Statements & Exhibits"
 
 
@@ -57,7 +58,8 @@ def run_retriever(name, dev_questions_lookup):
                            include_fields=["chunk_id", "doc_id", "page_start"], top_k=config.TOP_K)
 
         # Checks: right count, no duplicates, scores never increase, ranks always increase
-        assert len(chunks) == config.TOP_K
+        if name in ["dense", "bm25"]: assert len(chunks) == config.TOP_K
+        if name in ['hybrid']: assert len(chunks) <= 2 * config.TOP_K
         chunk_ids = []
         prev_score = None
         prev_rank = 0
@@ -181,8 +183,8 @@ def report(settings, results, questions_lookup, chunks_lookup, all_chunks, unrea
         if chunk['section'] == EXHIBITS:
             exhibit_corpus += 1
 
-    print(f"\nExhibits: {exhibit_results/total_results:.3f} of top-{settings['top_k']} results vs {exhibit_corpus/len(all_chunks):.3f} of the corpus")
-
+    print(f"\nExhibits: {exhibit_results/total_results:.3f} of all results vs {exhibit_corpus/len(all_chunks):.3f} of the corpus")
+    
     # ---------- 5. Top-10 filing mix ----------
     same_filing = 0
     same_company_other_year = 0

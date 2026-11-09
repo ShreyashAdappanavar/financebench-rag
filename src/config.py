@@ -34,9 +34,12 @@ EMBEDDINGS_PATH = VERSION_DIR / "all_embeddings.npy"
 IDS_PATH = VERSION_DIR / "all_ids.npy"
 BATCH_DIR = VERSION_DIR / "batch_storage"
 RESULTS_DIR = VERSION_DIR / "results"
+FILINGS_PATH = VERSION_DIR / "filings.json"
 
 # ---------- Settings ----------
 INDEX_NAME = "finbench-rag-index"
 EMBEDDING_MODEL = "text-embedding-3-small"
+FILTER_EXTRACTOR_MODEL = "gpt-5.4-nano"
 
 TOP_K = 50
+K_RRF = 60
