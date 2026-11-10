@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 import config
 from labeller import load_and_process_chunks, load_and_process_questions, chunk_question_grader, grader
-from retrieval import dense_retrieval, bm25_retrieval, hybrid_retrieval
+from retrieval import dense_retrieval, bm25_retrieval, hybrid_retrieval, filtered_dense, filtered_bm25, filtered_hybrid
 
 load_dotenv()
 
@@ -21,6 +21,9 @@ RETRIEVERS = {
     "dense": dense_retrieval,
     "bm25": bm25_retrieval,
     "hybrid": hybrid_retrieval,
+    "filtered_dense": filtered_dense,
+    "filtered_bm25": filtered_bm25,
+    "filtered_hybrid": filtered_hybrid,
 }
 
 def find_unreachable(all_chunks, questions_lookup):
@@ -46,7 +49,74 @@ KS = [5, 10, 20, 50, 60, 80, 100]
 EXHIBITS = "Financial Statements & Exhibits"
 
 
-def run_retriever(name, dev_questions_lookup):
+def check_filter(chunks, chunks_lookup, filings):
+    """Every chunk has the same extraction and lies inside the filter built from it."""
+    first = chunks[0]
+    for chunk in chunks:
+        assert (chunk['companies'], chunk['years'], chunk['filter_level']) == (first['companies'], first['years'], first['filter_level'])
+        if chunk['filter_level'] == "none":
+            continue
+        meta = chunks_lookup[chunk['chunk_id']]
+        assert meta['company'] in chunk['companies']
+        valid_years = [year for year in chunk['years'] if year in filings[meta['company']]]
+        if valid_years:
+            assert int(meta['fiscal_year']) in valid_years
+
+
+def extractor_test(results, questions_lookup, all_chunks, filings):
+    doc_info = {chunk['doc_id']: (chunk['company'], int(chunk['fiscal_year'])) for chunk in all_chunks}
+    outcomes = {}
+    levels = {}
+    for qid, chunks in results.items():
+        extracted = chunks[0]
+        gold_company, gold_year = doc_info[questions_lookup[qid]['doc_name']]
+        valid_years = [year for year in extracted['years'] if year in filings[gold_company]]
+
+        if extracted['filter_level'] == "none":
+            outcome = "1 no filter"
+        elif gold_company not in extracted['companies']:
+            outcome = "5 DANGER wrong company"
+        elif not valid_years:
+            outcome = "3 inside, wider"
+        elif gold_year in valid_years:
+            outcome = "2 inside, exact"
+        else:
+            outcome = "4 DANGER wrong year"
+
+        outcomes[outcome] = outcomes.get(outcome, 0) + 1
+        levels[extracted['filter_level']] = levels.get(extracted['filter_level'], 0) + 1
+        if outcome[0] in "1345":
+            print(f"  {outcome} | {qid} | {questions_lookup[qid]['question']}")
+            print(f"      extracted {extracted['companies']} {extracted['years']} | gold {gold_company} {gold_year}")
+
+    print(f"Extractor outcomes: {dict(sorted(outcomes.items()))}")
+    print(f"Filter levels: {levels}")
+
+
+def compare_extractions(names):
+    """Count questions whose extraction differs between the filtered results files."""
+    extractions = {}
+    for name in names:
+        with open(config.RESULTS_DIR / f"{name}.json", "r", encoding="utf-8") as f:
+            results = json.load(f)['results']
+        for qid, chunks in results.items():
+            key = (sorted(chunks[0]['companies']), sorted(chunks[0]['years']), chunks[0]['filter_level'])
+            extractions.setdefault(qid, []).append(key)
+    differ = [qid for qid, keys in extractions.items() if any(key != keys[0] for key in keys)]
+    print(f"\nExtraction disagreements across {names}: {len(differ)} {differ}")
+    for qid in differ:
+        print(f"  {qid}: {extractions[qid]}")
+
+
+def same_rankings(path_a, path_b):
+    with open(path_a, "r", encoding="utf-8") as f:
+        a = json.load(f)['results']
+    with open(path_b, "r", encoding="utf-8") as f:
+        b = json.load(f)['results']
+    return all([c['chunk_id'] for c in a[qid]] == [c['chunk_id'] for c in b[qid]] for qid in a)
+
+
+def run_retriever(name, dev_questions_lookup, chunks_lookup, filings):
     openai_client = OpenAI(api_key=OPENAI_API_KEY)
     pc = Pinecone(api_key=PINECONE_API_KEY)
     index = pc.index(name=config.INDEX_NAME)
@@ -59,7 +129,10 @@ def run_retriever(name, dev_questions_lookup):
 
         # Checks: right count, no duplicates, scores never increase, ranks always increase
         if name in ["dense", "bm25"]: assert len(chunks) == config.TOP_K
-        if name in ['hybrid']: assert len(chunks) <= 2 * config.TOP_K
+        if name in ["filtered_dense", "filtered_bm25"]: assert len(chunks) <= config.TOP_K
+        if name in ["hybrid", "filtered_hybrid"]: assert len(chunks) <= 2 * config.TOP_K
+        if name.startswith("filtered"): check_filter(chunks, chunks_lookup, filings)
+
         chunk_ids = []
         prev_score = None
         prev_rank = 0
@@ -213,6 +286,8 @@ def main():
     all_chunks, all_chunks_lookup = load_and_process_chunks()
     all_questions, dev_questions_lookup, test_questions_lookup = load_and_process_questions()
     assert len(dev_questions_lookup) == 38
+    with open(config.FILINGS_PATH) as f:
+        filings = json.load(f)
 
     unreachable = find_unreachable(all_chunks, dev_questions_lookup)
     print(f"Unreachable evidence items for {config.VERSION}: {len(unreachable)}")
@@ -229,10 +304,17 @@ def main():
             settings = saved['settings']
             results = saved['results']
         else:
-            settings, results = run_retriever(name, dev_questions_lookup)
+            settings, results = run_retriever(name, dev_questions_lookup, all_chunks_lookup, filings)
 
         results = grade(results, all_chunks_lookup, dev_questions_lookup)
         report(settings, results, dev_questions_lookup, all_chunks_lookup, all_chunks, unreachable)
+        if name.startswith("filtered"):
+            extractor_test(results, dev_questions_lookup, all_chunks, filings)
+
+    compare_extractions(["filtered_dense", "filtered_bm25", "filtered_hybrid"])
+    old = config.RESULTS_DIR / "bm25_old.json"
+    if old.exists():
+        print(f"BM25 regression (identical rankings): {same_rankings(old, config.RESULTS_DIR / 'bm25.json')}")
 
 
 if __name__ == "__main__":
