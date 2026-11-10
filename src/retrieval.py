@@ -4,7 +4,7 @@ from openai import OpenAI
 import config
 from pinecone.index import Index
 from typing import List, Dict
-
+import json
 
 NAMESPACE = config.NAMESPACE
 INDEX_NAME = config.INDEX_NAME
@@ -16,9 +16,67 @@ K_RRF = config.K_RRF
 def compute_individual_rrf_score(rank: int, k_rrf: int) -> float:
     return 1/(k_rrf + rank)
 
-def dense_retrieval(qs: str, openai_client: OpenAI, index: Index, include_fields: List[str],
-                    top_k: int = TOP_K) -> List[Dict]:
+def extract_companies_years(qs: str, openai_client: OpenAI) -> Dict[str, List]:
+    # 31 companies from filings.json; the model may only pick from these
+    with open(config.FILINGS_PATH) as f:
+        filings = json.load(f)
+    companies = list(filings.keys())
 
+    prompt = f"""Extract the companies and fiscal years mentioned in this question. 
+Return every company mentioned, using only names from the allowed list.
+Return every fiscal year written in the question, as numbers.
+Never guess a year that is not written (e.g. "last year" means no year).
+Return empty lists if nothing is mentioned.
+
+Question: {qs}"""
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "companies": {"type": "array", "items": {"type": "string", "enum": companies}},
+            "years": {"type": "array", "items": {"type": "integer"}}
+        },
+        "required": ["companies", "years"],
+        "additionalProperties": False
+    }
+
+    res = openai_client.responses.create(
+        model=config.FILTER_EXTRACTOR_MODEL,
+        input=prompt,
+        reasoning={"effort": "none"},
+        text={"format": {"type": "json_schema", "name": "companies_years", "schema": schema, "strict": True}}
+    )
+    return json.loads(res.output_text)
+
+def build_filter(extracted: Dict[str, List]) -> tuple[Dict | None, str]:
+    with open(config.FILINGS_PATH) as f:
+        filings = json.load(f)
+
+    clauses = []
+    for company in extracted['companies']:
+        if company not in filings:
+            continue
+        valid_years = [float(year) for year in extracted['years'] if year in filings[company]]
+        if valid_years:
+            clauses.append({"company": {"$eq": company}, "fiscal_year": {"$in": valid_years}})
+        else:
+            clauses.append({"company": {"$eq": company}})
+
+    if not clauses:
+        return None, "none"
+
+    year_clauses = [clause for clause in clauses if "fiscal_year" in clause]
+    if len(year_clauses) == len(clauses):
+        filter_level = "filing"
+    elif len(year_clauses) == 0:
+        filter_level = "company"
+    else:
+        filter_level = "mixed"
+
+    return {"$or": clauses}, filter_level
+
+def dense_retrieval(qs: str, openai_client: OpenAI, index: Index, include_fields: List[str],
+                    top_k: int = TOP_K, metadata_filter: Dict | None = None) -> List[Dict]:
 
     qs_embeddings = openai_client.embeddings.create(input=qs, model=EMBEDDING_MODEL).data[0].embedding
     res = index.documents.search(
@@ -30,6 +88,7 @@ def dense_retrieval(qs: str, openai_client: OpenAI, index: Index, include_fields
                 "values": qs_embeddings
                 }],
             include_fields=include_fields,
+            filter=metadata_filter,
         )
 
     chunks = []
@@ -44,7 +103,7 @@ def dense_retrieval(qs: str, openai_client: OpenAI, index: Index, include_fields
     return chunks
 
 def bm25_retrieval(qs: str, openai_client: OpenAI | None, index: Index, include_fields: List[str],
-                    top_k: int = TOP_K) -> List[Dict]:
+                   top_k: int = TOP_K, metadata_filter: Dict | None = None) -> List[Dict]:
     
     res = index.documents.search(
             namespace=NAMESPACE,
@@ -55,6 +114,7 @@ def bm25_retrieval(qs: str, openai_client: OpenAI | None, index: Index, include_
                 "query": qs,
                 }],
             include_fields=include_fields,
+            filter=metadata_filter,
         )
 
     chunks = []
@@ -69,11 +129,11 @@ def bm25_retrieval(qs: str, openai_client: OpenAI | None, index: Index, include_
     return chunks
 
 
-def hybrid_retrieval(qs: str, openai_client: OpenAI | None, index: Index, include_fields: List[str],
-                    top_k: int = TOP_K) -> List[Dict]:
-    
-    dense_res = dense_retrieval(qs, openai_client, index, include_fields, TOP_K)
-    bm25_res = bm25_retrieval(qs, openai_client, index, include_fields, TOP_K)
+def hybrid_retrieval(qs: str, openai_client: OpenAI, index: Index, include_fields: List[str],
+                     top_k: int = TOP_K, metadata_filter: Dict | None = None) -> List[Dict]:
+
+    dense_res = dense_retrieval(qs, openai_client, index, include_fields, top_k, metadata_filter)
+    bm25_res = bm25_retrieval(qs, openai_client, index, include_fields, top_k, metadata_filter)
 
     chunk_db = {}
     for chunk in dense_res:
@@ -111,3 +171,39 @@ def hybrid_retrieval(qs: str, openai_client: OpenAI | None, index: Index, includ
         record['score'] = record['rrf_score']
 
     return sorted_chunks
+
+def filtered_dense(qs: str, openai_client: OpenAI, index: Index, include_fields: List[str],
+                   top_k: int = TOP_K) -> List[Dict]:
+    
+    extracted = extract_companies_years(qs, openai_client)
+    metadata_filter, filter_level = build_filter(extracted)
+    chunks = dense_retrieval(qs, openai_client, index, include_fields, top_k, metadata_filter)
+    for chunk in chunks:
+        chunk['filter_level'] = filter_level
+        chunk['companies'] = extracted['companies']
+        chunk['years'] = extracted['years']
+    return chunks
+
+def filtered_bm25(qs: str, openai_client: OpenAI, index: Index, include_fields: List[str],
+                  top_k: int = TOP_K) -> List[Dict]:
+    
+    extracted = extract_companies_years(qs, openai_client)
+    metadata_filter, filter_level = build_filter(extracted)
+    chunks = bm25_retrieval(qs, openai_client, index, include_fields, top_k, metadata_filter)
+    for chunk in chunks:
+        chunk['filter_level'] = filter_level
+        chunk['companies'] = extracted['companies']
+        chunk['years'] = extracted['years']
+    return chunks
+
+def filtered_hybrid(qs: str, openai_client: OpenAI, index: Index, include_fields: List[str],
+                    top_k: int = TOP_K) -> List[Dict]:
+    
+    extracted = extract_companies_years(qs, openai_client)
+    metadata_filter, filter_level = build_filter(extracted)
+    chunks = hybrid_retrieval(qs, openai_client, index, include_fields, top_k, metadata_filter)
+    for chunk in chunks:
+        chunk['filter_level'] = filter_level
+        chunk['companies'] = extracted['companies']
+        chunk['years'] = extracted['years'] 
+    return chunks
