@@ -5,6 +5,8 @@ import config
 from pinecone.index import Index
 from typing import List, Dict
 import json
+import os
+from pinecone import Pinecone
 
 NAMESPACE = config.NAMESPACE
 INDEX_NAME = config.INDEX_NAME
@@ -12,6 +14,12 @@ EMBEDDING_MODEL = config.EMBEDDING_MODEL
 TOP_K = config.TOP_K
 K_RRF = config.K_RRF
 
+# Chunk text (prefix included) by chunk_id, for the reranker
+CHUNKS_LOOKUP = {}
+with open(config.CHUNKS_PATH, encoding="utf-8") as f:
+    for line in f:
+        chunk = json.loads(line)
+        CHUNKS_LOOKUP[chunk['chunk_id']] = chunk
 
 def compute_individual_rrf_score(rank: int, k_rrf: int) -> float:
     return 1/(k_rrf + rank)
@@ -24,7 +32,7 @@ def extract_companies_years(qs: str, openai_client: OpenAI) -> Dict[str, List]:
 
     prompt = f"""Extract the companies and fiscal years mentioned in this question. 
 Return every company mentioned, using only names from the allowed list.
-Return every fiscal year written in the question, as numbers.
+Return every fiscal year written in the question, as numbers. Turn two-digit years into four digits (“FY22” → 2022)
 Never guess a year that is not written (e.g. "last year" means no year).
 Return empty lists if nothing is mentioned.
 
@@ -96,6 +104,8 @@ def dense_retrieval(qs: str, openai_client: OpenAI, index: Index, include_fields
     for i, doc in enumerate(res.matches):
         curr_score = doc.score
         curr_doc = doc.to_dict()
+        curr_doc['dense_score'] = curr_score
+        curr_doc['dense_rank'] = i + 1
         curr_doc['score'] = curr_score
         curr_doc['rank'] = i + 1
         chunks.append(curr_doc)
@@ -122,6 +132,8 @@ def bm25_retrieval(qs: str, openai_client: OpenAI | None, index: Index, include_
     for i, doc in enumerate(res.matches):
         curr_score = doc.score
         curr_doc = doc.to_dict()
+        curr_doc['bm25_score'] = curr_score
+        curr_doc['bm25_rank'] = i + 1
         curr_doc['score'] = curr_score
         curr_doc['rank'] = i + 1
         chunks.append(curr_doc)
@@ -141,9 +153,11 @@ def hybrid_retrieval(qs: str, openai_client: OpenAI, index: Index, include_field
         tmp['chunk_id'] = chunk['chunk_id']
         tmp['doc_id'] = chunk['doc_id']
         tmp['page_start'] = chunk['page_start']
+        tmp['dense_score'] = chunk['score']
         tmp['dense_rank'] = chunk['rank']
+        tmp['bm25_score'] = None
         tmp['bm25_rank'] = None
-        tmp['rrf_score'] = compute_individual_rrf_score(chunk['rank'], K_RRF)
+        tmp['hybrid_score'] = compute_individual_rrf_score(chunk['rank'], K_RRF)
 
         chunk_db[chunk['chunk_id']] = tmp
 
@@ -153,22 +167,26 @@ def hybrid_retrieval(qs: str, openai_client: OpenAI, index: Index, include_field
             tmp['chunk_id'] = chunk['chunk_id']
             tmp['doc_id'] = chunk['doc_id']
             tmp['page_start'] = chunk['page_start']
+            tmp['dense_score'] = None
             tmp['dense_rank'] = None
+            tmp['bm25_score'] = chunk['score']
             tmp['bm25_rank'] = chunk['rank']
-            tmp['rrf_score'] = compute_individual_rrf_score(chunk['rank'], K_RRF)
-            
+            tmp['hybrid_score'] = compute_individual_rrf_score(chunk['rank'], K_RRF)
+
             chunk_db[chunk['chunk_id']] = tmp
 
         else:
+            chunk_db[chunk['chunk_id']]['bm25_score'] = chunk['score']
             chunk_db[chunk['chunk_id']]['bm25_rank'] = chunk['rank']
-            chunk_db[chunk['chunk_id']]['rrf_score'] += compute_individual_rrf_score(chunk['rank'], K_RRF)
+            chunk_db[chunk['chunk_id']]['hybrid_score'] += compute_individual_rrf_score(chunk['rank'], K_RRF)
 
     # Highest RRF score first; ties broken by chunk ID (A to Z) so reruns give the same order
-    sorted_chunks = sorted(chunk_db.values(), key=lambda record: (-record['rrf_score'], record['chunk_id']))
+    sorted_chunks = sorted(chunk_db.values(), key=lambda record: (-record['hybrid_score'], record['chunk_id']))
 
     for i, record in enumerate(sorted_chunks):
+        record['hybrid_rank'] = i + 1
         record['rank'] = i + 1
-        record['score'] = record['rrf_score']
+        record['score'] = record['hybrid_score']
 
     return sorted_chunks
 
@@ -207,3 +225,39 @@ def filtered_hybrid(qs: str, openai_client: OpenAI, index: Index, include_fields
         chunk['companies'] = extracted['companies']
         chunk['years'] = extracted['years'] 
     return chunks
+
+def rerank(qs: str, chunks: List[Dict]) -> List[Dict]:
+    assert len(chunks) <= 100   # Pinecone's reranker limit per call
+
+    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+    documents = [{"text": CHUNKS_LOOKUP[chunk['chunk_id']]['text']} for chunk in chunks]
+
+    res = pc.inference.rerank(
+        model=config.RERANKER_MODEL,
+        query=qs,
+        documents=documents,
+        top_n=len(documents),
+        return_documents=False,
+        parameters={"truncate": "END"},
+    )
+
+    reranked = []
+    for i, item in enumerate(res.data):
+        chunk = chunks[item.index]   # item.index = position in the list we sent
+        chunk['reranker_score'] = item.score
+        chunk['reranker_rank'] = i + 1
+        chunk['score'] = item.score
+        chunk['rank'] = i + 1
+        reranked.append(chunk)
+
+    return reranked
+
+def rerank_dense(qs: str, openai_client: OpenAI, index: Index, include_fields: List[str],
+                 top_k: int = TOP_K) -> List[Dict]:
+    chunks = filtered_dense(qs, openai_client, index, include_fields, top_k)
+    return rerank(qs, chunks)
+
+def rerank_hybrid(qs: str, openai_client: OpenAI, index: Index, include_fields: List[str],
+                  top_k: int = TOP_K) -> List[Dict]:
+    chunks = filtered_hybrid(qs, openai_client, index, include_fields, top_k)
+    return rerank(qs, chunks)

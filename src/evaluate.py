@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 import config
 from labeller import load_and_process_chunks, load_and_process_questions, chunk_question_grader, grader
-from retrieval import dense_retrieval, bm25_retrieval, hybrid_retrieval, filtered_dense, filtered_bm25, filtered_hybrid
+from retrieval import dense_retrieval, bm25_retrieval, hybrid_retrieval, filtered_dense, filtered_bm25, filtered_hybrid, rerank_dense, rerank_hybrid
 
 load_dotenv()
 
@@ -24,6 +24,8 @@ RETRIEVERS = {
     "filtered_dense": filtered_dense,
     "filtered_bm25": filtered_bm25,
     "filtered_hybrid": filtered_hybrid,
+    "rerank_dense": rerank_dense,
+    "rerank_hybrid": rerank_hybrid,
 }
 
 def find_unreachable(all_chunks, questions_lookup):
@@ -129,9 +131,9 @@ def run_retriever(name, dev_questions_lookup, chunks_lookup, filings):
 
         # Checks: right count, no duplicates, scores never increase, ranks always increase
         if name in ["dense", "bm25"]: assert len(chunks) == config.TOP_K
-        if name in ["filtered_dense", "filtered_bm25"]: assert len(chunks) <= config.TOP_K
-        if name in ["hybrid", "filtered_hybrid"]: assert len(chunks) <= 2 * config.TOP_K
-        if name.startswith("filtered"): check_filter(chunks, chunks_lookup, filings)
+        if name in ["filtered_dense", "filtered_bm25", "rerank_dense"]: assert len(chunks) <= config.TOP_K
+        if name in ["hybrid", "filtered_hybrid", "rerank_hybrid"]: assert len(chunks) <= 2 * config.TOP_K
+        if name.startswith("filtered") or name.startswith("rerank"): check_filter(chunks, chunks_lookup, filings)
 
         chunk_ids = []
         prev_score = None
