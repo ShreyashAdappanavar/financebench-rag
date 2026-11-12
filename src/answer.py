@@ -6,6 +6,7 @@ import json
 from openai import OpenAI
 from pinecone import Pinecone
 from dotenv import load_dotenv
+from scipy.stats import binomtest
 
 import config
 from labeller import load_and_process_questions
@@ -37,6 +38,23 @@ LADDER = ["no_context", "dense_top10", "hybrid_top10", "filtered_dense_top10",
 # Chunk-count sweep on the chosen pipeline: (setup name, chunks)
 SWEEP = [("rerank_dense", 5), ("rerank_dense_top10", 10), ("rerank_dense_top20", 20)]
 
+SPLIT = "test"   # set to "dev" once i'm done finalysing the pipeline
+TEST_SETUPS = ["no_context", "dense_top20", "rerank_dense_top20"]
+
+def mcnemar(answers, setup_a, setup_b):
+    """Exact McNemar: only questions where the two setups disagree on correct vs not count."""
+    only_a = 0
+    only_b = 0
+    for value in answers.values():
+        a_correct = value[setup_a]['judge_score']['score'] == 2
+        b_correct = value[setup_b]['judge_score']['score'] == 2
+        if a_correct and not b_correct:
+            only_a += 1
+        if b_correct and not a_correct:
+            only_b += 1
+    p = binomtest(only_a, only_a + only_b, 0.5).pvalue if only_a + only_b > 0 else 1.0
+    print(f"{setup_a} vs {setup_b}: only {setup_a} correct {only_a} | only {setup_b} correct {only_b} | p = {p:.4f}")
+
 def answer(qs, chunks, openai_client):
     if chunks:
         context = ""
@@ -57,6 +75,17 @@ If the answer is not in the chunks, say "I don't know".
         reasoning={"effort": "low"},
     )
     return res.output_text
+
+
+def run_pipeline(qs, openai_client, index, retriever=rerank_dense, n_chunks=20):
+    """Retrieve (or not) and answer. Defaults = the frozen pipeline: reranked dense, top 20."""
+    if retriever is None:
+        chunks = []
+    else:
+        chunks = retriever(qs, openai_client, index, include_fields=["chunk_id", "doc_id", "page_start"])[:n_chunks]
+    return chunks, answer(qs, chunks, openai_client)
+
+
 
 def judge_answer(question, gold, answer, openai_client):
     # "I don't know" is decided by rule, not by the judge
@@ -98,23 +127,23 @@ Judge only the final result against the gold answer. Do not use your own knowled
     return json.loads(res.output_text)
 
 
-def judge_all(answers, openai_client):
+def judge_all(answers, openai_client, names):
     for qid, value in answers.items():
-        for name in SETUPS:
+        for name in names:
             if 'judge_score' in value[name] and not REJUDGE:   # already judged
                 continue
             value[name]['judge_score'] = judge_answer(value['question'], value['gold'], value[name]['answer'], openai_client)
     return answers
 
 
-def print_scores(answers):
+def print_scores(answers, names):
     scores = {}
-    for name in SETUPS:
+    n = len(answers)
+    for name in names:
         counts = {0: 0, 1: 0, 2: 0}
         for value in answers.values():
             counts[value[name]['judge_score']['score']] += 1
         scores[name] = {"correct": counts[2], "idk": counts[1], "wrong": counts[0]}
-        n = len(answers)
         print(f"{name}: correct {counts[2]}/{n} | I don't know {counts[1]}/{n} | wrong {counts[0]}/{n}")
     return scores
 
@@ -158,7 +187,17 @@ def main():
     openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     index = Pinecone(api_key=os.getenv("PINECONE_API_KEY")).index(name=config.INDEX_NAME)
     all_questions, dev_questions_lookup, test_questions_lookup = load_and_process_questions()
-    path = config.RESULTS_DIR / "answers.json"
+
+    if SPLIT == "test":
+        questions_lookup = test_questions_lookup
+        names = TEST_SETUPS
+        path = config.RESULTS_DIR / "answers_test.json"
+        scores_path = config.RESULTS_DIR / "answer_scores_test.json"
+    else:
+        questions_lookup = dev_questions_lookup
+        names = list(SETUPS.keys())
+        path = config.RESULTS_DIR / "answers.json"
+        scores_path = config.RESULTS_DIR / "answer_scores.json"
 
     # 1. Load existing answers (if any)
     answers = {}
@@ -167,22 +206,19 @@ def main():
             answers = json.load(f)
 
     # 2. Generate only the setups missing for each question
-    for qid, question in dev_questions_lookup.items():
+    for qid, question in questions_lookup.items():
         qs = question['question']
         if qid not in answers:
             answers[qid] = {"question": qs, "gold": question['answer']}
 
-        for name, (retriever, n_chunks) in SETUPS.items():
+        for name in names:
             if name in answers[qid]:   # already generated
                 continue
-            if retriever is None:
-                chunks = []
-            else:
-                chunks = retriever(qs, openai_client, index, include_fields=["chunk_id", "doc_id", "page_start"])[:n_chunks]
-
+            retriever, n_chunks = SETUPS[name]
+            chunks, answer_text = run_pipeline(qs, openai_client, index, retriever, n_chunks)
             answers[qid][name] = {
                 "chunk_ids": [chunk['chunk_id'] for chunk in chunks],
-                "answer": answer(qs, chunks, openai_client),
+                "answer": answer_text,
             }
         print(f"done {qid}")
 
@@ -190,16 +226,21 @@ def main():
         json.dump(answers, f, indent=2)
 
     # 3. Judge (skips answers already judged unless REJUDGE), save, print
-    answers = judge_all(answers, openai_client)
+    answers = judge_all(answers, openai_client, names)
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump(answers, f, indent=2)
 
-    scores = print_scores(answers)
-    with open(config.RESULTS_DIR / "answer_scores.json", "w", encoding="utf-8") as f:
+    scores = print_scores(answers, names)
+    with open(scores_path, "w", encoding="utf-8") as f:
         json.dump(scores, f, indent=2)
-    plot_charts(scores)
 
+    if SPLIT == "dev":
+        plot_charts(scores)
+
+    if SPLIT == "test":
+        mcnemar(answers, "rerank_dense_top20", "no_context")
+        mcnemar(answers, "rerank_dense_top20", "dense_top20")
 
 if __name__ == "__main__":
     main()
