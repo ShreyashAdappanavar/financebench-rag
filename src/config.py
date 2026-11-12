@@ -41,6 +41,7 @@ INDEX_NAME = "finbench-rag-index"
 EMBEDDING_MODEL = "text-embedding-3-small"
 FILTER_EXTRACTOR_MODEL = "gpt-5.4-nano"
 RERANKER_MODEL = "bge-reranker-v2-m3"
+ANSWER_MODEL = "gpt-5.4-mini"
 
 TOP_K = 50
 K_RRF = 60
