@@ -1,0 +1,52 @@
+{
+  "no_context": {
+    "correct": 12,
+    "idk": 0,
+    "wrong": 26
+  },
+  "dense_top10": {
+    "correct": 19,
+    "idk": 12,
+    "wrong": 7
+  },
+  "dense_top20": {
+    "correct": 23,
+    "idk": 9,
+    "wrong": 6
+  },
+  "hybrid_top10": {
+    "correct": 17,
+    "idk": 18,
+    "wrong": 3
+  },
+  "filtered_dense_top10": {
+    "correct": 19,
+    "idk": 11,
+    "wrong": 8
+  },
+  "filtered_hybrid_top10": {
+    "correct": 16,
+    "idk": 15,
+    "wrong": 7
+  },
+  "rerank_dense_top10": {
+    "correct": 20,
+    "idk": 11,
+    "wrong": 7
+  },
+  "rerank_hybrid_top10": {
+    "correct": 19,
+    "idk": 12,
+    "wrong": 7
+  },
+  "rerank_dense": {
+    "correct": 15,
+    "idk": 17,
+    "wrong": 6
+  },
+  "rerank_dense_top20": {
+    "correct": 26,
+    "idk": 6,
+    "wrong": 6
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "no_context": {
+    "correct": 26,
+    "idk": 1,
+    "wrong": 47
+  },
+  "dense_top20": {
+    "correct": 43,
+    "idk": 19,
+    "wrong": 12
+  },
+  "rerank_dense_top20": {
+    "correct": 45,
+    "idk": 12,
+    "wrong": 17
+  }
+}

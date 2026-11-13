@@ -1,15 +1,20 @@
-# .gitignore
-
 finbench_github/
 .dev-docs/
 .env
 .venv/
 __pycache__/
 *.pyc
-data/*
-!data/split.json
 *.pdf
 tmp/
 scratch/
 .vscode/
 src/old
+
+# data: keep only the split, the chunks, the filings list and the results
+data/*
+!data/split.json
+!data/v1/
+data/v1/*
+!data/v1/chunks.jsonl
+!data/v1/filings.json
+!data/v1/results/

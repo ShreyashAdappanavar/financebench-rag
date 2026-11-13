@@ -1,0 +1,7 @@
+fastapi==0.141.1
+uvicorn==0.51.0
+openai==2.48.0
+pinecone==10.0.0
+python-dotenv==1.2.2
+scipy==1.17.1
+matplotlib==3.11.2
